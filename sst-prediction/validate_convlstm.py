@@ -1,0 +1,95 @@
+import numpy as np
+from openstl.utils import show_video_line
+from pre_import import *
+from gsim_vp import GSimVP
+import dataset_sst
+import matplotlib as mpl
+from matplotlib import animation
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from conv_lstm import SST_ConvLSTM
+def plot_imgs(pred, label):
+    n = len(pred)
+    for i in range(n):
+        ax = plt.subplot(2, n, i+1)
+        plt.imshow(label[i][0])
+        ax.axis('off')
+        ax = plt.subplot(2, n, n+i+1)
+        plt.imshow(pred[i][0])
+        ax.axis('off')
+    
+    plt.show()
+    plt.close()
+    
+predict_mode = 'seq'
+file_path = f'./gifs/gsimvp/predict_{predict_mode}/'
+def f(imgs, name, mi=0, ma=0, cmap='jet'):
+    plt.rcParams["figure.figsize"] = [7.50, 3.50]
+    #plt.rcParams["figure.autolayout"] = True
+
+    fig = plt.figure()
+    print(mi, ma)
+    ax = fig.add_subplot(111)
+    div = make_axes_locatable(ax)
+    cax = div.append_axes('right', '5%', '5%')
+    tx = ax.set_title('Frame 0')
+
+    def animate(i):
+        cax.cla()
+        data = np.random.rand(5, 5)
+        if mi!=0 or ma!=0:
+            im = ax.imshow(imgs[i][0], cmap=cmap, vmin=mi, vmax=ma)
+        else:
+            im = ax.imshow(imgs[i][0], cmap=cmap)
+        fig.colorbar(im, cax=cax)
+        tx.set_text('Frame {0}'.format(i))
+    ani = animation.FuncAnimation(fig, animate, frames=range(len(imgs)))
+    ani.save(f'{file_path+name}.gif', writer='imagemagick')
+
+
+def predict_seq2(batch_data, T):
+    total_pred = []
+    for i in range(T):    
+        pred = convlstm(batch_data)
+        batch_data = torch.cat((batch_data[:,1:,:,:,:], pred[:,-1:,:,:,:]), dim=1)
+        total_pred.append(pred[0,-1:,:,:,:])
+    total_pred = torch.cat(total_pred,dim=0).detach().numpy()
+    return total_pred
+
+
+sst_valid_dataset = dataset_sst.SSTDataset(3, predict_day=7 ,img_interval=2, data_label_gap=1,mode='train')
+data, label = sst_valid_dataset[0]
+T, C, H, W = label.shape
+print(T,C,H,W)
+record = torch.load('./models/gsimvp_40ep_imginterval_1_best.pkl')
+convlstm = SST_ConvLSTM().eval()
+convlstm.load_state_dict(record['model_state_dict'])
+
+
+example_idx = 0
+
+if predict_mode=='seq':
+    set_n = 4
+    seq_n = T*set_n
+    data = sst_valid_dataset.sst_data[example_idx:example_idx+7]
+    label = sst_valid_dataset.sst_data[example_idx+7: example_idx+37]
+    data = data.reshape((1,7,1,200,200))
+    label = label.reshape((1,30,1,200,200))
+    batch_data = torch.tensor(data)
+    total_pred = predict_seq2(batch_data[:1], T=30)
+    label = label.reshape(-1,1, 200,200)
+elif predict_mode=='once':
+    data, label = sst_valid_dataset[example_idx]
+    batch_data = data.reshape((1, *data.shape))
+    total_pred = convlstm(batch_data)[0][0].detach().numpy()
+    label = label.numpy()
+    
+mpl.rcParams['figure.figsize'] = [25, 10]
+#plot_imgs(pred, label)
+ma = max(np.max(total_pred), np.max(label))
+mi = min(np.min(total_pred), np.min(label))
+f(label, f'conv_label_{predict_mode}_{example_idx}', mi, ma)
+f(total_pred, f'conv_pred_{predict_mode}_{example_idx}', mi, ma)
+
+diff_img = label - total_pred
+diff_img = np.abs(diff_img)
+f(diff_img, f'diff_{example_idx}', np.min(diff_img), np.max(diff_img), 'Purples')
